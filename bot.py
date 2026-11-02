@@ -42,6 +42,11 @@ PLAIN_TICKERS = os.environ.get("PLAIN_TICKERS", "0") == "1"
 TICK_RE = re.compile(r"[$]([A-Za-z][A-Za-z0-9]{1,15})\b")
 TICK_PLAIN_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\b")
 
+GECKO_NET = {"ethereum": "eth", "binance smart chain": "bsc", "smart chain": "bsc",
+             "solana": "solana", "base": "base", "polygon pos": "polygon_pos",
+             "arbitrum": "arbitrum", "optimism": "optimism", "avalanche": "avax",
+             "robinhood": "robinhood"}
+
 STOPWORDS = {
     "DD", "GM", "GN", "GZ", "OK", "MC", "FDV", "ATH", "ATL", "CA", "AMA",
     "POV", "NFT", "LP", "APY", "APR", "DCA", "NGMI", "WAGMI", "LFG", "OMG",
@@ -55,6 +60,7 @@ DEDUPE = OrderedDict()          # message id -> timestamp
 # ---------------------------------------------------------------- lookups
 
 def dexscreener_ca(addr):
+    """(best_pair, others) atau None jika token tak terdaftar."""
     r = _session.get(f"https://api.dexscreener.com/latest/dex/tokens/{addr}",
                      timeout=(10, 30))
     if r.status_code != 200:
@@ -64,6 +70,24 @@ def dexscreener_ca(addr):
         return None
     best = max(pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0)
     return best, len(pairs) - 1
+
+
+def gecko_ca(addr, chain):
+    """Fallback GeckoTerminal; membutuhkan harga atau None (raiss 429 -> None)."""
+    net = GECKO_NET.get(chain)
+    if not net:
+        return None
+    r = _session.get(f"https://api.geckoterminal.com/api/v2/networks/{net}/tokens/{addr}",
+                     timeout=(10, 30))
+    if r.status_code != 200:
+        return None
+    attr = ((r.json() or {}).get("data") or {}).get("attributes") or {}
+    price = attr.get("price_usd")
+    if not price:
+        return None
+    return {"priceUsd": price, "symbol": attr.get("symbol") or "?",
+            "name": attr.get("name") or "Token", "network_attr": attr.get("address"),
+            "net": net}
 
 
 def gecko_ticker(tick):
@@ -206,6 +230,53 @@ def not_found(mention):
              })
 
 
+def answer_gecko_ca(chain, addr, g, mention):
+    deliver({"username": "Harga Live", "allowed_mentions": {"parse": []},
+             "content": mention or None,
+             "embeds": [{"title": f"{g['name']} (${g['symbol']})",
+                         "description": f"CA `{addr}`",
+                         "color": 0x1565C0,
+                         "fields": [
+                             {"name": "Harga", "value": f"**{fmt_usd(g['priceUsd'])}**",
+                              "inline": True},
+                             {"name": "Sumber", "value": "GeckoTerminal", "inline": True},
+                             {"name": "Chain", "value": f"`{g['net']}`", "inline": True}],
+                         "url": f"https://www.geckoterminal.com/{g['net']}/tokens/{addr}",
+                         "footer": {"text": "via GeckoTerminal"}}]})
+
+
+def ca_lookup(addr):
+    """Return (kind, data) atau ('none', None). kind='dex' (DexScreener) atau
+    'gecko' (fallback)."""
+    chain = "ethereum" if addr.startswith("0x") else "solana"
+    try:
+        res = dexscreener_ca(addr)
+        if res:
+            return chain, addr, res
+    except Exception as e:
+        print(f"dexscreener gagal ({addr}): {e}", file=sys.stderr)
+    try:
+        g = gecko_ca(addr, chain)
+        if g:
+            return chain, addr, {"gecko": g}
+    except Exception as e:
+        print(f"gecko gagal ({addr}): {e}", file=sys.stderr)
+    return chain, addr, None
+
+
+def say_once_per(key, seconds, content):
+    """Anti-spam: kirim pesan sekali per `seconds` untuk `key` yang sama."""
+    now = time.time()
+    last = MISS_TS.get(key, 0)
+    if now - last >= seconds:
+        MISS_TS[key] = now
+        deliver({"username": "Harga Live", "allowed_mentions": {"parse": []},
+                 "content": content})
+
+
+MISS_TS = {}
+
+
 def handle_message(d):
     """Accept MESSAGE_CREATE packet fields dict; answer with price."""
     chan, gid = str(d.get("channel_id") or ""), d.get("guild_id")
@@ -223,11 +294,19 @@ def handle_message(d):
     mention = f"<@{(d.get('author') or {}).get('id', '')}>"
 
     try:
-        for addr in set(CA_RE.findall(content)) | set(SOL_RE.findall(content)):
-            chain = "ethereum" if addr.startswith("0x") else "solana"
-            res = dexscreener_ca(addr)
-            if not res:
-                not_found(mention)
+        addrs = set(CA_RE.findall(content))
+        evms = "|".join(addrs)
+        for cand in set(SOL_RE.findall(content)):
+            # anti false-positive: substring alamat EVM bukan alamat Solana
+            if cand not in evms:
+                addrs.add(cand)
+        for addr in list(addrs)[:3]:
+            chain, addr, res = ca_lookup(addr)
+            if res is None:
+                say_once_per(addr, 60, f"{mention} → data harga buat `{addr[:18]}…` "
+                                       "sedang padat (API sibuk), coba kirim ulang dalam beberapa saat.")
+            elif "gecko" in res:
+                answer_gecko_ca(chain, addr, res["gecko"], mention)
             else:
                 best, others = res
                 answer_ca(chain, addr, best, others, mention)
