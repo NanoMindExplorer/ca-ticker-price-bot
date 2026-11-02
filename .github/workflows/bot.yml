@@ -1,0 +1,45 @@
+name: ca-ticker-price-bot
+
+on:
+  schedule:
+    # restart the realtime bot every 5 h (cancel-and-replace -> one live gateway)
+    - cron: "0 */5 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "loop = realtime bot | once = short test pass"
+        required: false
+        default: "loop"
+        type: choice
+        options: [loop, once]
+
+permissions: {}
+
+concurrency:
+  group: ca-ticker-price-bot
+  cancel-in-progress: true
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install dependencies
+        run: pip install -q requests websocket-client
+      - name: Run bot
+        env:
+          DC_BOT_TOKEN: ${{ secrets.DC_BOT_TOKEN }}
+          DC_PRICE_WEBHOOK: ${{ secrets.DC_PRICE_WEBHOOK }}
+          CHANNELS: ${{ secrets.CHANNELS }}
+        run: |
+          MODE="${{ inputs.mode || 'loop' }}"
+          if [ "$MODE" = "loop" ]; then
+            python bot.py --loop 330
+          else
+            python bot.py
+          fi
