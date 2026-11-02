@@ -36,7 +36,11 @@ HB_THREAD_ON = False
 
 CA_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
 SOL_RE = re.compile(r"\b([1-9A-HJ-NP-Za-km-z]{32,44})\b")
-TICK_RE = re.compile(r"[$]([A-Za-z][A-Za-z0-9]{2,15})\b|\b([A-Z][A-Z0-9]{2,9})\b")
+# default: hanya $TICKER yang memicu lookup; kata ALL-CAPS polos bisa diaktifkan
+# lewat secret/variable PLAIN_TICKERS=1
+PLAIN_TICKERS = os.environ.get("PLAIN_TICKERS", "0") == "1"
+TICK_RE = re.compile(r"[$]([A-Za-z][A-Za-z0-9]{1,15})\b")
+TICK_PLAIN_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\b")
 
 STOPWORDS = {
     "DD", "GM", "GN", "GZ", "OK", "MC", "FDV", "ATH", "ATL", "CA", "AMA",
@@ -227,15 +231,21 @@ def handle_message(d):
             else:
                 best, others = res
                 answer_ca(chain, addr, best, others, mention)
-        tickers = set(t.upper() for m in TICK_RE.finditer(content)
-                      for t in [m.group(1) or m.group(2)]
-                      if t and t.upper() not in STOPWORDS and len(t) >= 3)
+        tickers = set()
+        for m in TICK_RE.finditer(content):
+            t = m.group(1)
+            if t and t.upper() not in STOPWORDS and len(t) >= 2:
+                tickers.add(t.upper())
+        if PLAIN_TICKERS:
+            for m in TICK_PLAIN_RE.finditer(content):
+                t = m.group(1)
+                if t and t.upper() not in STOPWORDS and len(t) >= 3:
+                    tickers.add(t.upper())
         for tick in list(tickers)[:3]:
             res = gecko_ticker(tick)
             if res:
                 answer_gecko(res, mention)
-            else:
-                not_found(mention)
+            # ticker tidak dikenal = diam (anti spam); hanya CA miss yang diberi tahu
     except Exception as e:
         print(f"lookup error: {e}", file=sys.stderr)
 
