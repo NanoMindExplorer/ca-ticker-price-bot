@@ -51,8 +51,7 @@ STOPWORDS = {
     "DD", "GM", "GN", "GZ", "OK", "MC", "FDV", "ATH", "ATL", "CA", "AMA",
     "POV", "NFT", "LP", "APY", "APR", "DCA", "NGMI", "WAGMI", "LFG", "OMG",
     "BRB", "IDK", "FYI", "BTW", "ASAP", "ETA", "TG", "WTF", "LOL", "GG",
-    "OG", "KYC", "DAO", "ICO", "IEO", "BNB", "ETHUSDT", "USDC", "USD",
-    "USDT", "BTCUSDT", "DEX", "CEX", "PMC", "PSA", "SEC", "REMINDER",
+    "OG", "DAO", "ICO", "IEO", "PSA", "SEC", "REMINDER",
 }
 DEDUPE = OrderedDict()          # message id -> timestamp
 
@@ -177,7 +176,10 @@ def fmt_big(v):
 
 
 def answer_ca(chain, addr, best, others, mention):
-    pc = best.get("priceChange")
+    pc = (best.get("priceChange") or {})
+    if isinstance(pc, dict):
+        pc = pc.get("h24")       # DexScreener: {"m5","h1","h6","h24"}
+    pc = float(pc) if pc not in (None, "", {}) else None
     color = 0x2E7D32 if (pc or 0) >= 0 else 0xB71C1C
     bt = best.get("baseToken") or {}
     liq = (best.get("liquidity") or {}).get("usd")
