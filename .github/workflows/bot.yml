@@ -13,7 +13,8 @@ on:
         type: choice
         options: [loop, once]
 
-permissions: {}
+permissions:
+  contents: write   # banner-once flag (state.json) di-commit kembali
 
 concurrency:
   group: ca-ticker-price-bot

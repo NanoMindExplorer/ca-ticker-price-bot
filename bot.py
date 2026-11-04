@@ -14,7 +14,7 @@ message_content intent enabled; replies go through the channel webhook.
 Exits 1 immediately on permanent auth failures (invalid token).
 Env: DC_BOT_TOKEN, DC_PRICE_WEBHOOK, optional CHANNELS, WATCH_GUILD.
 """
-import json, os, random, re, sys, threading, time
+import json, os, random, re, subprocess, sys, threading, time
 from collections import OrderedDict
 
 import requests
@@ -332,8 +332,35 @@ def handle_message(d):
 
 
 def ready_banner():
-    deliver({"username": "Harga Live",
-             "content": "🟢 **Price bot live** — siap jawab harga saat CA / `$TICKER` ditulis"})
+    # banner hanya SEKALI selamanya (flag di state.json yang di-commit),
+    # bukan tiap gateway READY / reconnect / restart job
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(HERE, "state.json")
+    state = {}
+    try:
+        state = json.load(open(path))
+    except Exception:
+        pass
+    if state.get("banner_sent"):
+        return
+    if not deliver({"username": "Harga Live",
+                    "content": "🟢 **Price bot live** — siap jawab harga saat CA / `$TICKER` ditulis"}):
+        return
+    state["banner_sent"] = True
+    try:
+        with open(path, "w") as f:
+            json.dump(state, f, indent=1, sort_keys=True)
+    except Exception as e:
+        print(f"state write: {e}", file=sys.stderr)
+        return
+    subprocess.run(["git", "add", "state.json"], cwd=HERE)
+    subprocess.run(["git", "commit", "-m", "banner sent [skip ci]"],
+                   cwd=HERE, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                          cwd=HERE, capture_output=True, text=True).stdout.strip()
+    if head:
+        subprocess.run(["git", "push", "origin", head], cwd=HERE,
+                       capture_output=True)
 
 
 # ---------------------------------------------------------------- gateway
